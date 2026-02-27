@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - ai-network
+    environment:
+      # 🚩 จุดสำคัญ: บังคับให้ AI ตอบทีละคน (คนอื่นจะเข้าคิวรอ) เพื่อถนอม CPU T320
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      # จำกัด Thread ให้ใช้แค่ 4-6 Threads (ตามความเหมาะสมของ Xeon)
+      - OLLAMA_NUM_THREAD=4 
+    deploy:
+      resources:
+        limits:
+          memory: 4G # กัน AI กิน RAM จนระบบหลักล่ม
+
+  streamlit:
+    build: .
+    container_name: khiluem-jot
+    hostname: khiluem-jot
+    ports:
+      - "9000:8501"
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=qwen2.5:1.5b
+    volumes:
+      - .:/app
+      - ./data:/app/data 
+    restart: unless-stopped
+    networks:
+      ai-network:
+        aliases:
+          - streamlit
+          - localhost
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # จำกัด CPU ของฝั่งหน้าเว็บไม่ให้ไปแย่งจังหวะ AI ประมวลผล
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    command: tunnel --no-autoupdate run --url http://khiluem-jot:8501
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN} 
+    restart: unless-stopped
+    depends_on:
+      - streamlit
+    networks:
+      - ai-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  ai-network:
+    driver: bridge
+
+volumes:
+  ollama_data:
